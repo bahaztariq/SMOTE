@@ -1,0 +1,482 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SMOTE & déséquilibre</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="progress"><div class="progress-bar" id="progressBar"></div></div>
+
+  <main class="deck" id="deck">
+
+    <!-- 1. Titre -->
+    <section class="slide title-slide">
+      <div class="title-dots" aria-hidden="true" id="titleDots"></div>
+      <p class="kicker">Machine Learning · Classification</p>
+      <h1>SMOTE<br><span class="muted">& gestion du déséquilibre des classes</span></h1>
+      <p class="lead">Pourquoi un modèle ignore les clients qui résilient, et comment le corriger.</p>
+      <p class="hint">← → ou Espace pour naviguer · F pour plein écran</p>
+    </section>
+
+    <!-- 2. Plan -->
+    <section class="slide">
+      <p class="kicker">Objectif</p>
+      <h2>Comprendre le problème, puis savoir le corriger</h2>
+      <ol class="agenda">
+        <li><span>01</span>Pourquoi un modèle est biaisé sur un dataset déséquilibré</li>
+        <li><span>02</span>Le paramètre <code>class_weight</code></li>
+        <li><span>03</span>Random Oversampling et Undersampling</li>
+        <li><span>04</span>SMOTE : la génération synthétique</li>
+        <li><span>05</span>Les risques : surapprentissage et fuite de données</li>
+        <li><span>06</span>Implémentation avec <code>imbalanced-learn</code></li>
+      </ol>
+    </section>
+
+    <!-- 3. Le cas churn -->
+    <section class="slide">
+      <p class="kicker">01 · Le problème</p>
+      <h2>Le cas du churn : très peu de résiliations</h2>
+      <div class="cols">
+        <div>
+          <p>Sur 100 clients d'un opérateur télécom, une poignée seulement résilie son abonnement chaque mois.</p>
+          <ul class="bullets">
+            <li><b class="c-maj">Classe majoritaire</b> : clients fidèles (<code>churn = 0</code>)</li>
+            <li><b class="c-min">Classe minoritaire</b> : clients qui partent (<code>churn = 1</code>)</li>
+            <li>Ratio typique : de <b>1:10</b> à <b>1:100</b></li>
+          </ul>
+          <p class="note">C'est justement la classe rare que l'on veut détecter, car un client perdu coûte cher.</p>
+        </div>
+        <div class="people-grid" id="peopleGrid" aria-label="100 clients dont 7 qui résilient"></div>
+      </div>
+    </section>
+
+    <!-- 4. Accuracy paradox -->
+    <section class="slide">
+      <p class="kicker">01 · Le problème</p>
+      <h2>Le paradoxe de l'accuracy</h2>
+      <div class="cols">
+        <div>
+          <p>Un modèle « paresseux » qui prédit <b>toujours « ne résilie pas »</b> :</p>
+          <label class="slider-row">
+            Taux de churn : <b id="churnRateLabel">5 %</b>
+            <input type="range" id="churnRate" min="1" max="50" value="5">
+          </label>
+          <div class="big-stats">
+            <div class="stat"><span class="stat-value good" id="naiveAcc">95 %</span><span class="stat-label">Accuracy</span></div>
+            <div class="stat"><span class="stat-value bad">0 %</span><span class="stat-label">Recall churn</span></div>
+          </div>
+          <p class="note">Une accuracy élevée qui ne détecte <b>aucun</b> client à risque.</p>
+        </div>
+        <div>
+          <p class="caption">Matrice de confusion (10 000 clients)</p>
+          <table class="confusion">
+            <thead><tr><th></th><th>Prédit 0</th><th>Prédit 1</th></tr></thead>
+            <tbody>
+              <tr><th>Réel 0</th><td class="tn" id="cmTN">9 500</td><td>0</td></tr>
+              <tr><th>Réel 1</th><td class="fn" id="cmFN">500</td><td>0</td></tr>
+            </tbody>
+          </table>
+          <p class="caption">Tous les churners finissent en <b class="c-min">faux négatifs</b>.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- 5. Pourquoi biaisé -->
+    <section class="slide">
+      <p class="kicker">01 · Le problème</p>
+      <h2>Pourquoi le modèle est-il biaisé ?</h2>
+      <div class="cards three">
+        <div class="card">
+          <div class="card-icon">∑</div>
+          <h3>La perte est dominée</h3>
+          <p>La fonction de coût moyenne les erreurs sur tous les exemples. Avec 95 % de non-churners, minimiser la perte revient surtout à bien classer la majorité.</p>
+        </div>
+        <div class="card">
+          <div class="card-icon">⟋</div>
+          <h3>La frontière se décale</h3>
+          <p>La frontière de décision est repoussée vers la classe minoritaire. Les probabilités prédites de churn restent sous le seuil de 0,5.</p>
+        </div>
+        <div class="card">
+          <div class="card-icon">◌</div>
+          <h3>Trop peu d'exemples</h3>
+          <p>Avec peu de churners, le modèle ne voit pas assez la diversité de leurs profils pour en apprendre des motifs généralisables.</p>
+        </div>
+      </div>
+      <div class="callout">
+        <b>À retenir :</b> mesurer avec <code>recall</code>, <code>precision</code>, <code>F1</code> et <code>PR-AUC</code> de la classe minoritaire, jamais avec l'accuracy seule.
+      </div>
+    </section>
+
+    <!-- 6. class_weight -->
+    <section class="slide">
+      <p class="kicker">02 · Pondération</p>
+      <h2>Le paramètre <code>class_weight</code></h2>
+      <div class="cols">
+        <div>
+          <p>Plutôt que de modifier les données, on modifie la <b>fonction de coût</b> : une erreur sur un churner pèse plus lourd.</p>
+          <div class="formula">w<sub>c</sub> = n<sub>samples</sub> / (n<sub>classes</sub> × n<sub>c</sub>)</div>
+          <p class="caption">C'est la formule utilisée par <code>class_weight="balanced"</code>.</p>
+          <pre><code class="py">from sklearn.linear_model import LogisticRegression
+
+# Pondération automatique
+model = LogisticRegression(class_weight="balanced")
+
+# Ou pondération manuelle
+model = LogisticRegression(class_weight={0: 1, 1: 10})</code></pre>
+        </div>
+        <div class="calc">
+          <h3>Calculateur</h3>
+          <label>Nombre total de clients <input type="number" id="cwTotal" value="10000" min="2"></label>
+          <label>Nombre de churners <input type="number" id="cwMin" value="500" min="1"></label>
+          <div class="weights">
+            <div><span class="c-maj">w<sub>0</sub></span><b id="w0">0.526</b></div>
+            <div><span class="c-min">w<sub>1</sub></span><b id="w1">10.000</b></div>
+          </div>
+          <p class="caption" id="cwExplain">Une erreur sur un churner coûte autant que 19 erreurs sur des clients fidèles.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- 7. class_weight pros/cons -->
+    <section class="slide">
+      <p class="kicker">02 · Pondération</p>
+      <h2><code>class_weight</code> : forces et limites</h2>
+      <div class="cols">
+        <div class="card pro">
+          <h3>✓ Avantages</h3>
+          <ul class="bullets">
+            <li>Aucune donnée créée ni supprimée</li>
+            <li>Aucun risque de fuite de données</li>
+            <li>Coût de calcul nul, une seule ligne de code</li>
+            <li>Disponible dans <code>LogisticRegression</code>, <code>SVC</code>, <code>RandomForest</code>, <code>DecisionTree</code>…</li>
+          </ul>
+        </div>
+        <div class="card con">
+          <h3>✗ Limites</h3>
+          <ul class="bullets">
+            <li>N'ajoute aucune information sur la classe rare</li>
+            <li>Peut dégrader la calibration des probabilités</li>
+            <li>Tous les modèles ne l'acceptent pas (ex. <code>KNeighborsClassifier</code>)</li>
+            <li>XGBoost / LightGBM utilisent <code>scale_pos_weight</code> ≈ n<sub>neg</sub> / n<sub>pos</sub></li>
+          </ul>
+        </div>
+      </div>
+      <div class="callout">C'est souvent la <b>première baseline</b> à essayer avant tout rééchantillonnage.</div>
+    </section>
+
+    <!-- 8. Random over / under -->
+    <section class="slide">
+      <p class="kicker">03 · Rééchantillonnage</p>
+      <h2>Random Oversampling / Undersampling</h2>
+      <div class="cols wide-right">
+        <div>
+          <div class="seg" role="tablist" id="resampleTabs">
+            <button class="active" data-mode="orig">Original</button>
+            <button data-mode="over">Oversampling</button>
+            <button data-mode="under">Undersampling</button>
+          </div>
+          <div class="resample-text" id="resampleText"></div>
+          <div class="mini-bars">
+            <div class="mini-bar"><span>Fidèles</span><div class="track"><div class="fill maj" id="barMaj"></div></div><b id="cntMaj">48</b></div>
+            <div class="mini-bar"><span>Churn</span><div class="track"><div class="fill min" id="barMin"></div></div><b id="cntMin">8</b></div>
+          </div>
+        </div>
+        <div class="dot-field" id="dotField"></div>
+      </div>
+      <div class="legend">
+        <span><i class="dot maj"></i>Fidèle</span>
+        <span><i class="dot min"></i>Churn original</span>
+        <span><i class="dot min dup"></i>Copie exacte</span>
+        <span><i class="dot maj ghost"></i>Supprimé</span>
+      </div>
+    </section>
+
+    <!-- 9. over/under comparison -->
+    <section class="slide">
+      <p class="kicker">03 · Rééchantillonnage</p>
+      <h2>Deux approches, deux compromis</h2>
+      <div class="cols">
+        <div class="card">
+          <h3><span class="c-min">↑</span> Random Oversampling</h3>
+          <p>On <b>duplique au hasard</b> des exemples de la classe minoritaire jusqu'à l'équilibre souhaité.</p>
+          <ul class="bullets">
+            <li class="plus">Aucune perte d'information</li>
+            <li class="minus">Copies exactes : le modèle mémorise les mêmes points → <b>surapprentissage</b></li>
+            <li class="minus">Dataset plus gros, entraînement plus long</li>
+          </ul>
+        </div>
+        <div class="card">
+          <h3><span class="c-maj">↓</span> Random Undersampling</h3>
+          <p>On <b>supprime au hasard</b> des exemples de la classe majoritaire.</p>
+          <ul class="bullets">
+            <li class="plus">Entraînement plus rapide</li>
+            <li class="minus"><b>Perte d'information</b> potentiellement utile</li>
+            <li class="minus">Variance élevée si le dataset est petit</li>
+          </ul>
+        </div>
+      </div>
+      <pre><code class="py">from imblearn.over_sampling import RandomOverSampler
+from imblearn.under_sampling import RandomUnderSampler
+
+X_res, y_res = RandomOverSampler(sampling_strategy=0.5, random_state=42).fit_resample(X_train, y_train)</code></pre>
+    </section>
+
+    <!-- 10. SMOTE principe -->
+    <section class="slide">
+      <p class="kicker">04 · SMOTE</p>
+      <h2>SMOTE : Synthetic Minority Oversampling Technique</h2>
+      <p class="lead small">Au lieu de copier les churners, on en <b>fabrique de nouveaux, plausibles</b>, entre des churners existants. <span class="muted">(Chawla et al., 2002)</span></p>
+      <div class="steps">
+        <div class="step"><span>1</span><p>Choisir un point <b class="c-min">x<sub>i</sub></b> de la classe minoritaire</p></div>
+        <div class="step"><span>2</span><p>Trouver ses <b>k plus proches voisins</b> parmi la classe minoritaire (k = 5 par défaut)</p></div>
+        <div class="step"><span>3</span><p>Tirer au hasard un voisin <b class="c-min">x<sub>zi</sub></b></p></div>
+        <div class="step"><span>4</span><p>Créer un point sur le segment qui les relie</p></div>
+        <div class="step"><span>5</span><p>Répéter jusqu'à atteindre le ratio voulu</p></div>
+      </div>
+      <div class="formula big">x<sub>new</sub> = x<sub>i</sub> + λ · (x<sub>zi</sub> − x<sub>i</sub>) &nbsp;&nbsp;<span class="muted">avec λ ~ U(0, 1)</span></div>
+    </section>
+
+    <!-- 11. SMOTE demo -->
+    <section class="slide">
+      <p class="kicker">04 · SMOTE · Démo interactive</p>
+      <h2>La mécanique de génération, pas à pas</h2>
+      <div class="cols demo">
+        <div class="canvas-wrap"><canvas id="smoteCanvas" width="1120" height="840"></canvas></div>
+        <div class="demo-panel">
+          <div class="phase" id="smotePhase">Cliquez sur <b>Étape suivante</b> pour démarrer.</div>
+          <div class="formula small" id="smoteFormula">x<sub>new</sub> = x<sub>i</sub> + λ · (x<sub>zi</sub> − x<sub>i</sub>)</div>
+          <label class="slider-row">k voisins : <b id="kLabel">5</b>
+            <input type="range" id="kSlider" min="1" max="8" value="5">
+          </label>
+          <div class="btn-row">
+            <button class="btn primary" id="smoteStep">Étape suivante</button>
+            <button class="btn" id="smoteAuto">Équilibrer</button>
+            <button class="btn ghost" id="smoteReset">Réinitialiser</button>
+          </div>
+          <div class="counts">
+            <div><i class="dot maj"></i>Fidèles <b id="nMaj">0</b></div>
+            <div><i class="dot min"></i>Churn réels <b id="nMin">0</b></div>
+            <div><i class="dot syn"></i>Synthétiques <b id="nSyn">0</b></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 12. Variants -->
+    <section class="slide">
+      <p class="kicker">04 · SMOTE</p>
+      <h2>Variantes utiles dans <code>imbalanced-learn</code></h2>
+      <div class="cards two-by">
+        <div class="card"><h3><code>SMOTENC</code></h3><p>Gère les variables <b>catégorielles</b> (type de contrat, mode de paiement…). Indispensable pour un dataset de churn mixte.</p></div>
+        <div class="card"><h3><code>BorderlineSMOTE</code></h3><p>Ne génère qu'autour des points minoritaires proches de la <b>frontière</b>, là où le modèle hésite.</p></div>
+        <div class="card"><h3><code>ADASYN</code></h3><p>Génère davantage de points dans les zones où la classe minoritaire est <b>difficile à apprendre</b>.</p></div>
+        <div class="card"><h3><code>SMOTETomek</code> / <code>SMOTEENN</code></h3><p>SMOTE suivi d'un <b>nettoyage</b> des points ambigus qui se chevauchent entre classes.</p></div>
+      </div>
+    </section>
+
+    <!-- 13. Risques -->
+    <section class="slide">
+      <p class="kicker">05 · Risques</p>
+      <h2>Les risques de SMOTE</h2>
+      <div class="cards three">
+        <div class="card warn">
+          <h3>Surapprentissage</h3>
+          <p>Les points synthétiques sont des interpolations des mêmes churners. Le modèle peut apprendre des <b>régions artificielles</b> qui n'existent pas en production.</p>
+        </div>
+        <div class="card warn">
+          <h3>Bruit et chevauchement</h3>
+          <p>Si un churner est un outlier ou est entouré de clients fidèles, SMOTE <b>propage le bruit</b> et brouille la frontière.</p>
+        </div>
+        <div class="card warn">
+          <h3>Données inadaptées</h3>
+          <p>Interpoler des variables one-hot ou catégorielles donne des valeurs absurdes (ex. 0,37 « contrat mensuel »). En haute dimension, la notion de voisin se dégrade.</p>
+        </div>
+      </div>
+      <div class="callout danger">
+        <b>Le risque majeur : la fuite de données.</b> Elle produit des scores excellents en validation, puis un effondrement en production.
+      </div>
+    </section>
+
+    <!-- 14. Leakage -->
+    <section class="slide">
+      <p class="kicker">05 · Risques</p>
+      <h2>Fuite de données : l'ordre des opérations compte</h2>
+      <div class="cols">
+        <div class="flow bad">
+          <h3>✗ Incorrect</h3>
+          <div class="flow-box">Dataset complet</div>
+          <div class="flow-arrow">↓</div>
+          <div class="flow-box hl-bad">SMOTE</div>
+          <div class="flow-arrow">↓</div>
+          <div class="flow-box">train_test_split</div>
+          <div class="flow-arrow">↓</div>
+          <div class="flow-split"><div class="flow-box">Train</div><div class="flow-box hl-bad">Test ⚠</div></div>
+          <p class="caption">Le test contient des points synthétiques fabriqués à partir des points du train, quasi-identiques à ceux vus pendant l'entraînement. Les scores sont gonflés.</p>
+        </div>
+        <div class="flow good">
+          <h3>✓ Correct</h3>
+          <div class="flow-box">Dataset complet</div>
+          <div class="flow-arrow">↓</div>
+          <div class="flow-box">train_test_split <span class="muted">(stratify=y)</span></div>
+          <div class="flow-arrow">↓</div>
+          <div class="flow-split"><div class="flow-box hl-good">Train → SMOTE</div><div class="flow-box">Test intact</div></div>
+          <div class="flow-arrow">↓</div>
+          <div class="flow-box">Modèle entraîné</div>
+          <p class="caption">Le test reflète la distribution réelle. En validation croisée, SMOTE doit être appliqué <b>dans chaque fold</b>, sur la partie entraînement uniquement.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- 15. Leakage CV -->
+    <section class="slide">
+      <p class="kicker">05 · Risques</p>
+      <h2>En validation croisée : le piège classique</h2>
+      <div class="cols">
+        <div>
+          <p class="caption bad-text">✗ Rééchantillonner avant la CV</p>
+          <pre><code class="py">X_res, y_res = SMOTE().fit_resample(X_train, y_train)
+
+# Les folds de validation contiennent
+# des points synthétiques → fuite
+cross_val_score(model, X_res, y_res, cv=5)</code></pre>
+        </div>
+        <div>
+          <p class="caption good-text">✓ SMOTE dans un Pipeline imblearn</p>
+          <pre><code class="py">from imblearn.pipeline import Pipeline
+
+pipe = Pipeline([
+    ("smote", SMOTE(random_state=42)),
+    ("model", model),
+])
+# SMOTE s'applique uniquement au fit,
+# jamais au predict ni au fold de validation
+cross_val_score(pipe, X_train, y_train, cv=5)</code></pre>
+        </div>
+      </div>
+      <div class="callout">Le <code>Pipeline</code> d'<b>imblearn</b> (et non celui de sklearn) sait appeler <code>fit_resample</code> pendant l'entraînement seulement.</div>
+    </section>
+
+    <!-- 16. Implementation 1 -->
+    <section class="slide">
+      <p class="kicker">06 · Implémentation</p>
+      <h2>Exemple complet : churn avec <code>imbalanced-learn</code></h2>
+      <pre class="tall"><code class="py">import pandas as pd
+from sklearn.model_selection import train_test_split, StratifiedKFold, cross_validate
+from sklearn.preprocessing import StandardScaler
+from sklearn.linear_model import LogisticRegression
+from imblearn.over_sampling import SMOTE
+from imblearn.pipeline import Pipeline
+
+df = pd.read_csv("churn.csv")
+X, y = df.drop(columns="churn"), df["churn"]
+print(y.value_counts(normalize=True))   # ex. 0: 0.95 / 1: 0.05
+
+# 1. Split stratifié AVANT tout rééchantillonnage
+X_train, X_test, y_train, y_test = train_test_split(
+    X, y, test_size=0.2, stratify=y, random_state=42)
+
+# 2. Pipeline : scaling → SMOTE → modèle
+pipe = Pipeline([
+    ("scaler", StandardScaler()),
+    ("smote", SMOTE(sampling_strategy=0.5, k_neighbors=5, random_state=42)),
+    ("model", LogisticRegression(max_iter=1000)),
+])
+
+# 3. Validation croisée stratifiée, SMOTE refait dans chaque fold
+cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
+scores = cross_validate(pipe, X_train, y_train, cv=cv,
+                        scoring=["recall", "precision", "f1", "average_precision"])</code></pre>
+    </section>
+
+    <!-- 17. Implementation 2 -->
+    <section class="slide">
+      <p class="kicker">06 · Implémentation</p>
+      <h2>Optimiser et évaluer sur le test intact</h2>
+      <div class="cols">
+        <pre><code class="py">from sklearn.model_selection import GridSearchCV
+from sklearn.metrics import classification_report
+
+param_grid = {
+    "smote__k_neighbors": [3, 5, 7],
+    "smote__sampling_strategy": [0.3, 0.5, 1.0],
+    "model__C": [0.1, 1, 10],
+}
+search = GridSearchCV(pipe, param_grid, cv=cv,
+                      scoring="average_precision")
+search.fit(X_train, y_train)
+
+# Évaluation finale : test jamais rééchantillonné
+y_pred = search.predict(X_test)
+print(classification_report(y_test, y_pred))</code></pre>
+        <div>
+          <h3>Données mixtes (churn réel)</h3>
+          <pre><code class="py">from imblearn.over_sampling import SMOTENC
+
+# indices des colonnes catégorielles
+cat_idx = [0, 3, 5]   # contrat, paiement, région
+smote = SMOTENC(categorical_features=cat_idx,
+                random_state=42)</code></pre>
+          <ul class="bullets">
+            <li>Choisir le score sur <b>PR-AUC</b> ou <b>F1</b> de la classe 1</li>
+            <li>Ajuster ensuite le <b>seuil de décision</b> selon le coût métier</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <!-- 18. Comparatif -->
+    <section class="slide">
+      <p class="kicker">Synthèse</p>
+      <h2>Quelle technique choisir ?</h2>
+      <table class="compare">
+        <thead>
+          <tr><th>Technique</th><th>Principe</th><th>Point fort</th><th>Point faible</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><code>class_weight</code></td><td>Pondère la perte</td><td>Simple, sans fuite</td><td>N'ajoute pas d'information</td></tr>
+          <tr><td>Random Over</td><td>Duplique la minorité</td><td>Aucune perte de données</td><td>Surapprentissage (copies)</td></tr>
+          <tr><td>Random Under</td><td>Réduit la majorité</td><td>Rapide</td><td>Perte d'information</td></tr>
+          <tr><td>SMOTE</td><td>Interpole la minorité</td><td>Points nouveaux et variés</td><td>Bruit, fuite si mal placé</td></tr>
+        </tbody>
+      </table>
+      <div class="callout">Aucune méthode ne gagne toujours. On les <b>compare en validation croisée</b>, sur la même métrique orientée classe minoritaire.</div>
+    </section>
+
+    <!-- 19. Bonnes pratiques -->
+    <section class="slide">
+      <p class="kicker">Conclusion</p>
+      <h2>Check-list des bonnes pratiques</h2>
+      <ul class="checklist">
+        <li>Mesurer avec recall, precision, F1 et PR-AUC, pas avec l'accuracy</li>
+        <li>Toujours faire un <code>train_test_split</code> <b>stratifié</b> avant tout rééchantillonnage</li>
+        <li>Commencer par la baseline <code>class_weight="balanced"</code></li>
+        <li>Placer SMOTE dans un <code>imblearn.pipeline.Pipeline</code> pour la CV</li>
+        <li>Ne jamais rééchantillonner le jeu de test</li>
+        <li>Utiliser <code>SMOTENC</code> s'il y a des variables catégorielles</li>
+        <li>Ajuster le seuil de décision selon le coût métier d'un churn manqué</li>
+      </ul>
+    </section>
+
+    <!-- 20. Fin -->
+    <section class="slide title-slide end">
+      <p class="kicker">Merci</p>
+      <h1>Questions ?</h1>
+      <p class="lead">Documentation : <code>imbalanced-learn.org</code></p>
+    </section>
+
+  </main>
+
+  <nav class="controls">
+    <button id="prevBtn" aria-label="Diapositive précédente">←</button>
+    <span id="counter">1 / 20</span>
+    <button id="nextBtn" aria-label="Diapositive suivante">→</button>
+  </nav>
+
+  <script src="script.js"></script>
+</body>
+</html>
